@@ -1,0 +1,12 @@
+[package]
+name = "rust-ui-iced"
+version = "0.1.0"
+authors = ["diegodorado <diegodorado@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.3", features = ["image", "tokio"] }
+iced_native = "0.4.0"
+iced_video_player = { git = "https://github.com/jazzfool/iced_video_player" }
+url = "2"
+reqwest = "0.11.6" 
