@@ -1,6 +1,6 @@
 mod style;
 
-use std::net::{IpAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
 
 use iced::{
     button, executor, keyboard, Align, Application, Button, Column, Command, Container, Element,
@@ -13,36 +13,37 @@ const INCONSOLATA_BYTES: &'static [u8] = include_bytes!("../fonts/Inconsolata-Re
 
 #[derive(Default)]
 struct Flags {
- ip: [u8; 4],
-  port: u16,
+    ip_octets: [u8; 4],
+    port: u16,
 }
 
-fn      get_flags() -> Flags {
-    let socket = UdpSocket::bind("0.0.0.0:8601").expect("couldn't bind to address");
-    socket
-        .set_broadcast(true)
-        .expect("set_broadcast call failed");
+impl Flags {
+    fn init() -> Flags {
+        let socket = UdpSocket::bind("0.0.0.0:8601").expect("couldn't bind to address");
+        socket
+            .set_broadcast(true)
+            .expect("set_broadcast call failed");
 
-    socket
-        .send_to(&[0x44, 0x48, 0x01, 0x01], "255.255.255.255:8600")
-        .expect("couldn't send message");
+        socket
+            .send_to(&[0x44, 0x48, 0x01, 0x01], "255.255.255.255:8600")
+            .expect("couldn't send message");
 
-    let mut buf = [0; 524];
-    let (_len, addr) = socket.recv_from(&mut buf).expect("Didn't receive data");
-    //println!("{:?}", buf);
+        let mut buf = [0; 524];
+        let (_len, addr) = socket.recv_from(&mut buf).expect("Didn't receive data");
 
-    let ip = match addr.ip() {
-        IpAddr::V4(ipv4) => ipv4.octets(),
-        _ => [0, 0, 0, 0],
-    };
+        let ip_octets = match addr.ip() {
+            IpAddr::V4(ipv4) => ipv4.octets(),
+            _ => panic!("Invalid IP format."),
+        };
 
-    let port: u16 = ((buf[91] as u16) << 8) + (buf[90] as u16);
+        let port: u16 = ((buf[91] as u16) << 8) + (buf[90] as u16);
 
-    Flags { ip, port }
+        Flags { ip_octets, port }
+    }
 }
 
 pub fn main() -> iced::Result {
-    let flags = get_flags();
+    let flags = Flags::init();
 
     App::run(Settings {
         exit_on_close_request: true,
@@ -53,6 +54,7 @@ pub fn main() -> iced::Result {
 
 fn keycap(key: char) -> Text {
     Text::new(key.to_string())
+        .size(30)
         .width(Length::Units(50))
         .height(Length::Units(50))
         .horizontal_alignment(HorizontalAlignment::Center)
@@ -61,17 +63,19 @@ fn keycap(key: char) -> Text {
 
 #[derive(Clone, Debug)]
 enum Message {
-    Loaded(Result<(), CameraError>),
+    Loaded(Result<String, AppError>),
     EventOccurred(iced_native::Event),
     VideoPlayerMessage(VideoPlayerMessage),
     UpPressed,
     DownPressed,
     LeftPressed,
     RightPressed,
+    CmdSent(Result<String, AppError>),
 }
 
-struct State {
+struct App {
     video: VideoPlayer,
+    socket: SocketAddrV4,
     up_btn: button::State,
     down_btn: button::State,
     left_btn: button::State,
@@ -79,37 +83,90 @@ struct State {
     should_exit: bool,
 }
 
-enum App {
-    Loading,
-    Loaded(State),
+enum CameraCmd {
+    PtzUp,
+    PtzUpStop,
+    PtzDown,
+    PtzDownStop,
+    PtzLeft,
+    PtzLeftStop,
+    PtzRight,
+    PtzRightStop,
+    PtzLeftUp,
+    PtzRightUp,
+    PtzLeftDown,
+    PtzRightDown,
+    PtzCenter,
+    PtzVPatrol,
+    PtzVPatrolStop,
+    PtzHPatrol,
+    PtzHPatrolStop,
+    IrOn,
+    IrOff,
 }
 
-struct Camera {
-    port: u16,
+impl CameraCmd {
+    fn value(&self) -> u8 {
+        match *self {
+            Self::PtzUp => 0,
+            Self::PtzUpStop => 1,
+            Self::PtzDown => 2,
+            Self::PtzDownStop => 3,
+            Self::PtzLeft => 4,
+            Self::PtzLeftStop => 5,
+            Self::PtzRight => 6,
+            Self::PtzRightStop => 7,
+            Self::PtzLeftUp => 90,
+            Self::PtzRightUp => 91,
+            Self::PtzLeftDown => 92,
+            Self::PtzRightDown => 93,
+            Self::PtzCenter => 25,
+            Self::PtzVPatrol => 26,
+            Self::PtzVPatrolStop => 27,
+            Self::PtzHPatrol => 28,
+            Self::PtzHPatrolStop => 29,
+            Self::IrOn => 94,
+            Self::IrOff => 94,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-enum CameraError {
-    RotateError,
+enum AppError {
+    InitializationError(&'static str),
     APIError,
 }
 
-impl From<reqwest::Error> for CameraError {
-    fn from(error: reqwest::Error) -> CameraError {
+impl From<reqwest::Error> for AppError {
+    fn from(error: reqwest::Error) -> AppError {
         dbg!(error);
-        CameraError::APIError
+        AppError::APIError
     }
 }
 
 impl App {
-    async fn rotate() -> Result<(), CameraError> {
-        let body = reqwest::get("https://www.rust-lang.org")
-            .await?
-            .text()
-            .await?;
+    async fn initialize() -> Result<String, AppError> {
+        Ok("Everythink Ok".to_string())
+    }
+
+    async fn send_cmd(socket: SocketAddrV4, cmd: CameraCmd) -> Result<String, AppError> {
+        let username = "admin";
+        let passsword = "qwerpoiu";
+        let onestep = 0;
+        let url = format!(
+            "http://{}:{}/decoder_control.cgi?loginuse={}&loginpas={}&command={}&onestep={}",
+            socket.ip(),
+            socket.port(),
+            username,
+            passsword,
+            cmd.value(),
+            onestep,
+        );
+        println!("{:?}", url);
+        let body = reqwest::get(url).await?.text().await?;
 
         println!("body = {:?}", body);
-        Ok(())
+        Ok(body)
     }
 }
 
@@ -119,25 +176,26 @@ impl Application for App {
     type Flags = Flags;
 
     fn new(flags: Flags) -> (Self, Command<Message>) {
-        println!("{:?}", flags.port);
-        println!("{:?}", flags.ip);
-        let ip = format!(
-            "{}.{}.{}.{}",
-            flags.ip[0], flags.ip[1], flags.ip[2], flags.ip[3]
-        );
+        let o = flags.ip_octets;
+        let ip = Ipv4Addr::new(o[0], o[1], o[2], o[3]);
+        let socket = SocketAddrV4::new(ip, flags.port);
         let username = "admin";
         let passsword = "qwerpoiu";
         let rtsp_port = 10554;
         let url = format!(
             "rtsp://{}:{}@{}:{}/udp/av0_0",
-            username, passsword, ip, rtsp_port,
+            username,
+            passsword,
+            ip.to_string(),
+            rtsp_port,
         );
+        println!("{:?}", url);
 
         let video = VideoPlayer::new(&url::Url::parse(&url.to_string()).unwrap(), true).unwrap();
 
-        /*
         (
             App {
+                socket,
                 video,
                 up_btn: Default::default(),
                 down_btn: Default::default(),
@@ -145,13 +203,7 @@ impl Application for App {
                 right_btn: Default::default(),
                 should_exit: false,
             },
-            Command::none(),
-        )
-        */
-
-        (
-            App::Loading,
-            Command::perform(App::rotate(), Message::Loaded),
+            Command::perform(App::initialize(), Message::Loaded),
         )
     }
 
@@ -161,8 +213,18 @@ impl Application for App {
 
     fn update(&mut self, message: Message, _: &mut iced::Clipboard) -> Command<Message> {
         match message {
-            Message::Loaded(Ok(())) => {
-                println!("LOaded");
+            Message::CmdSent(Ok(msg)) => {
+                println!("Sent {:?}", msg);
+                Command::none()
+            }
+
+            Message::CmdSent(Err(msg)) => {
+                println!("Sent Err {:?}", msg);
+                Command::none()
+            }
+
+            Message::Loaded(Ok(msg)) => {
+                println!("LOaded {:?}", msg);
                 Command::none()
             }
 
@@ -191,83 +253,96 @@ impl Application for App {
                 Command::none()
             }
 
-            Message::EventOccurred(event) => match self {
-                  App::Loading => Command::none(),
-
-                App::Loaded(state) => match event {
-                    Event::Keyboard(keyboard::Event::KeyPressed {
-                        modifiers: _,
-                        key_code,
-                    }) => {
-                        if key_code == keyboard::KeyCode::Escape {
-                            println!("QUIT");
-                            state.should_exit = true;
-                        } else {
-                            println!("{:?}", key_code);
-                        }
-                        Command::none()
-                    }
-                    Event::Window(window::Event::CloseRequested) => {
-                        state.should_exit = true;
+            Message::EventOccurred(event) => match event {
+                Event::Keyboard(keyboard::Event::KeyPressed {
+                    modifiers: _,
+                    key_code,
+                }) => match key_code {
+                    keyboard::KeyCode::W => Command::perform(
+                        App::send_cmd(self.socket, CameraCmd::PtzUp),
+                        Message::CmdSent,
+                    ),
+                    keyboard::KeyCode::S => Command::perform(
+                        App::send_cmd(self.socket, CameraCmd::PtzDown),
+                        Message::CmdSent,
+                    ),
+                    keyboard::KeyCode::Escape => {
+                        println!("QUIT");
+                        self.should_exit = true;
                         Command::none()
                     }
                     _ => Command::none(),
                 },
+                Event::Keyboard(keyboard::Event::KeyReleased {
+                    modifiers: _,
+                    key_code,
+                }) => match key_code {
+                    keyboard::KeyCode::W => Command::perform(
+                        App::send_cmd(self.socket, CameraCmd::PtzUpStop),
+                        Message::CmdSent,
+                    ),
+                    keyboard::KeyCode::S => Command::perform(
+                        App::send_cmd(self.socket, CameraCmd::PtzDownStop),
+                        Message::CmdSent,
+                    ),
+                    _ => Command::none(),
+                },
+                Event::Window(window::Event::CloseRequested) => {
+                    self.should_exit = true;
+                    Command::none()
+                }
+                _ => Command::none(),
             },
             Message::VideoPlayerMessage(msg) => {
-                //return self.video.update(msg).map(Message::VideoPlayerMessage);
-                Command::none()
+                return self.video.update(msg).map(Message::VideoPlayerMessage);
             }
         }
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        //self.video.subscription().map(Message::VideoPlayerMessage);
-     iced_native::subscription::events().map(Message::EventOccurred)
+        self.video.subscription().map(Message::VideoPlayerMessage);
+        iced_native::subscription::events().map(Message::EventOccurred)
     }
 
     fn should_exit(&self) -> bool {
-        match self {
-            App::Loading => false,
-            App::Loaded(state) => state.should_exit,
-        }
+        self.should_exit
     }
 
     fn view(&mut self) -> Element<Message> {
-        let content = match self {
-            App::Loading => Column::new().push(
-                Text::new("Loading")
+        let content = Column::new()
+            .push(
+                Text::new("Load")
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .vertical_alignment(VerticalAlignment::Center),
-            ),
-            App::Loaded(state) => Column::new().push(state.video.frame_view()).push(
+            )
+            .push(self.video.frame_view())
+            .push(
                 Row::new()
                     .align_items(Align::End)
                     .push(
-                        Button::new(&mut state.left_btn, keycap('A'))
+                        Button::new(&mut self.left_btn, keycap('A'))
                             .style(style::Button)
                             .on_press(Message::LeftPressed),
                     )
                     .push(
                         Column::new()
                             .push(
-                                Button::new(&mut state.up_btn, keycap('W'))
+                                Button::new(&mut self.up_btn, keycap('W'))
                                     .style(style::Button)
                                     .on_press(Message::UpPressed),
                             )
                             .push(
-                                Button::new(&mut state.down_btn, keycap('S'))
+                                Button::new(&mut self.down_btn, keycap('S'))
                                     .style(style::Button)
                                     .on_press(Message::DownPressed),
                             ),
                     )
                     .push(
-                        Button::new(&mut state.right_btn, keycap('D'))
+                        Button::new(&mut self.right_btn, keycap('D'))
                             .style(style::Button)
                             .on_press(Message::RightPressed),
                     ),
-            ),
-        };
+            );
 
         Container::new(content)
             .width(Length::Fill)
@@ -278,4 +353,3 @@ impl Application for App {
             .into()
     }
 }
-

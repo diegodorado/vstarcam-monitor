@@ -18,7 +18,6 @@ const WHITE: Color = Color::from_rgb(
     0xfa as f32 / 255.0,
 );
 
-
 pub struct Container;
 
 impl container::StyleSheet for Container {
@@ -53,8 +52,6 @@ impl button::StyleSheet for Button {
     }
 
     fn pressed(&self) -> button::Style {
-        button::Style {
-            ..self.hovered()
-        }
+        button::Style { ..self.hovered() }
     }
 }
